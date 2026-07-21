@@ -1,0 +1,30 @@
+---
+- name: Reject an incomplete access request
+  ansible.builtin.assert:
+    that:
+      - (intake_event.source_ip_mask | default('')) | length > 0
+      - (intake_event.destination_ip_mask | default('')) | length > 0
+      - intake_event.ports | default('') | string | length > 0
+      - intake_event.protocol | default('') | string | length > 0
+    fail_msg: >-
+      Incomplete request payload: source, destination, protocol and ports
+      are all required.
+
+- name: Normalize the firewall access request from the event payload
+  ansible.builtin.set_fact:
+    request:
+      source_ip: "{{ intake_event.source_ip_mask | trim }}"
+      destination_ip: "{{ intake_event.destination_ip_mask | trim }}"
+      port: "{{ intake_event.ports | trim if intake_event.ports is string else intake_event.ports }}"
+      protocol: "{{ intake_event.protocol | trim if intake_event.protocol is string else intake_event.protocol }}"
+      requester: "{{ intake_event.requester | default('unknown') }}"
+      number: "{{ intake_event.ritm_number | default('') }}"
+      sys_id: "{{ intake_event.sys_id | default('') }}"
+      table: "{{ snow_request_table }}"
+
+- name: Mark the ticket In Progress
+  ansible.builtin.include_role:
+    name: snow_ticket
+  vars:
+    snow_action: in_progress
+    snow_work_note: "Firewall change pipeline started processing this request."

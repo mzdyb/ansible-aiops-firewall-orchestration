@@ -1,0 +1,4 @@
+---
+change_id: "{{ request.number | default('CHGXXXX') }}"
+change_branch: "{{ git_branch_prefix | default('fw-change') }}/{{ change_id }}"
+snapshot_name: "pre-{{ change_id }}.xml"

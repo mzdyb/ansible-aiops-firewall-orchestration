@@ -1,0 +1,71 @@
+---
+- name: Detect FW configuration drift
+  hosts: pa_fw
+  connection: local
+
+  tasks:
+    - name: Run two-phase drift detection on each firewall
+      ansible.builtin.include_role:
+        name: gather_network_state
+        tasks_from: detect_drift
+
+- name: Process drift results
+  hosts: localhost
+
+  tasks:
+    - name: Get per-host drift results
+      ansible.builtin.set_fact:
+        ns_drift: "{{ ns_drift | default({}) | combine({item: hostvars[item].host_drift_detail | default('ok')}) }}"
+      loop: "{{ groups['pa_fw'] | default([]) }}"
+
+    - name: Identify drifted firewalls
+      ansible.builtin.set_fact:
+        drifted_firewalls: "{{ ns_drift | dict2items | rejectattr('value', 'equalto', 'ok') | map(attribute='key') | list }}"
+
+    - name: Halt if configuration drifted
+      when: drifted_firewalls | length > 0
+      block:
+        - name: Identify the originating ticket from the event payload
+          ansible.builtin.set_fact:
+            request:
+              sys_id: "{{ intake_event.sys_id | default('') }}"
+              table: "{{ snow_request_table }}"
+              number: "{{ intake_event.ritm_number | default('') }}"
+
+        - name: Create a drift work note in ServiceNow
+          ansible.builtin.include_role:
+            name: snow_ticket
+          vars:
+            snow_action: incomplete
+            snow_work_note: |-
+              Halting: running config has drifted from the git SoT on {{ drifted_firewalls | join(', ') }}. Fix the drift before reasoning/deploy.
+
+              {{ drifted_firewalls | map('extract', hostvars, 'host_drift_report') | join('\n\n') }}
+
+        - name: Halt pipeline due to configuration drift
+          ansible.builtin.fail:
+            msg: "Configuration drift detected on {{ drifted_firewalls | join(', ') }}. Halting before intake/AI/PR."
+
+- name: Process connectivity request from ServiceNow
+  hosts: localhost
+
+  roles:
+    - request_intake
+
+- name: Build configuration state, author rules, propose change
+  hosts: localhost
+
+  tasks:
+    - name: Build configuration state for firewalls
+      ansible.builtin.include_role:
+        name: gather_network_state
+
+    - name: Trace FW path and author firewall rules
+      ansible.builtin.include_role:
+        name: ai_reason
+      vars:
+        ai_mode: reason
+
+    - name: Commit to a branch and open the PR
+      ansible.builtin.include_role:
+        name: propose_change

@@ -1,0 +1,41 @@
+---
+# Builds network_state for the LLM from each firewall's host_vars plus the drift results
+
+- name: Assemble declared state (source of truth) for both firewalls
+  ansible.builtin.set_fact:
+    ns_source_of_truth: >-
+      {{ ns_source_of_truth | default({}) | combine({item: {
+           'rules': hostvars[item].fw_security_rules | default([]),
+           'zones': hostvars[item].fw_zones | default([])
+         }}) }}
+  loop: "{{ groups['pa_fw'] | default([]) }}"
+
+- name: Assemble per-device state (interfaces, zones, routes, rules)
+  ansible.builtin.set_fact:
+    ns_devices: >-
+      {{ ns_devices | default({}) | combine({item: {
+           'interfaces': hostvars[item].fw_interfaces | default([]),
+           'zones': hostvars[item].fw_zones | default([]),
+           'routes': hostvars[item].fw_static_routes | default([]),
+           'rules': hostvars[item].fw_security_rules | default([])
+         }}) }}
+  loop: "{{ groups['pa_fw'] | default([]) }}"
+
+- name: Assemble per-host drift results
+  ansible.builtin.set_fact:
+    ns_drift: "{{ ns_drift | default({}) | combine({item: hostvars[item].host_drift_detail | default('ok')}) }}"
+  loop: "{{ groups['pa_fw'] | default([]) }}"
+
+- name: Build the normalized network_state
+  ansible.builtin.set_fact:
+    network_state:
+      request: "{{ request }}"
+      devices: "{{ ns_devices | default({}) }}"
+      source_of_truth: "{{ ns_source_of_truth | default({}) }}"
+      drift: "{{ ns_drift | default({}) }}"
+
+- name: Publish network_state to downstream plays / job templates
+  ansible.builtin.set_stats:
+    data:
+      network_state: "{{ network_state }}"
+    aggregate: false

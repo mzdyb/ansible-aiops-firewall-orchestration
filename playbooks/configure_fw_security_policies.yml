@@ -1,0 +1,32 @@
+---
+- name: Configure security policies
+  hosts: pa_fw
+  connection: local
+
+  tasks:
+    - name: Configure security rules
+      paloaltonetworks.panos.panos_security_rule:
+        provider: "{{ panos_provider }}"
+        rule_name: "{{ item.rule_name }}"
+        description: "{{ item.description | default(omit) }}"
+        source_zone: "{{ item.source_zone }}"
+        source_ip: "{{ item.source_ip }}"
+        source_user: "{{ item.source_user }}"
+        destination_zone: "{{ item.destination_zone }}"
+        destination_ip: "{{ item.destination_ip }}"
+        application: "{{ item.application }}"
+        service: "{{ item.service }}"
+        category: "{{ item.category }}"
+        action: "{{ item.action }}"
+        log_start: "{{ item.log_start }}"
+        log_end: "{{ item.log_end }}"
+        rule_type: "{{ item.rule_type }}"
+        negate_source: "{{ item.negate_source }}"
+        negate_destination: "{{ item.negate_destination }}"
+        disabled: "{{ item.disabled }}"
+        # No placement params: host_vars lists rules in rulebase order, and a
+        # 'before DENY-ANY-ANY' anchor dangles on a fresh box until that rule exists.
+        commit: false
+        state: "{{ fw_rules_state | default(item.state | default('present')) }}"
+      loop: "{{ fw_security_rules | default([]) }}"
+      tags: security_rules

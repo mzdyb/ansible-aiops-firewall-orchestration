@@ -1,0 +1,23 @@
+---
+- name: Check whether repo_root is a git repository
+  ansible.builtin.stat:
+    path: "{{ repo_root }}/.git"
+  register: _repo_git_dir
+
+- name: Clone the source-of-truth repo into the workspace
+  when: not _repo_git_dir.stat.exists
+  block:
+    - name: Require a GitHub token for the clone (private repo)
+      ansible.builtin.assert:
+        that: github_token | default('') | length > 0
+        fail_msg: "repo_root is not a git clone and no github_token is available to clone {{ git_repo_slug }}."
+
+    - name: Clone the repo
+      ansible.builtin.command:
+        cmd: "git clone https://x-access-token:{{ github_token }}@github.com/{{ git_repo_slug }}.git /tmp/ai-fw-sot"
+        creates: /tmp/ai-fw-sot/.git
+      no_log: true
+
+    - name: Use the clone as repo_root
+      ansible.builtin.set_fact:
+        repo_root: /tmp/ai-fw-sot

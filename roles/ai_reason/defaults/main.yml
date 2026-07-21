@@ -1,0 +1,140 @@
+---
+# reason = trace the path and author the FW rules
+# summary = enrich the change request
+ai_mode: reason
+
+ai_reason_prompt_dir: "{{ playbook_dir }}/../templates"
+
+ai_reason_system_prompt: >-
+  You are a senior network security engineer. You are given the raw state of
+  two Palo Alto firewalls — each firewall's interfaces (name, IP/subnet, zone),
+  static routes, and existing security rules — plus a connectivity request
+  (source IP, destination IP, protocol, port). Your job is to:
+  (1) TRACE THE TRAFFIC PATH: determine which firewalls the flow crosses and
+  in what order by locating which interface subnet contains the source IP,
+  then following routes toward the destination IP.
+  (2) RESOLVE ZONES PER DEVICE: for each firewall on the path, identify the
+  ingress zone (the zone of the interface where traffic enters) and the egress
+  zone (the zone of the interface where traffic exits toward the destination).
+  (3) AUTHOR THE RULES: emit one security rule per firewall that needs one,
+  with the correct zone pair, the request's source/dest IPs, and the
+  appropriate application/service.
+  Think step by step through the path trace. The zone pairs on different
+  firewalls will typically be ASYMMETRIC (e.g. APP→CORE on one, CORE→DB on
+  the other) because traffic enters and exits each device through different
+  interfaces. Get the direction right on each device.
+
+ai_summary_system_prompt: >-
+  You are a change manager. Write a concise, factual change summary for a
+  ServiceNow change request describing the firewall rule being deployed: what
+  it permits, on which firewall, why, the risk, and how it is rolled back.
+  Plain text, no markdown headers, a few short sentences.
+
+ai_tool_schema:
+  - type: function
+    function:
+      name: submit_firewall_rules
+      description: >-
+        Return the traced path explanation and either the authored security
+        rules for every firewall on the traffic path that needs a new rule, OR
+        an empty rules list when no rule may be authored (port not in the
+        authoritative application list, untraceable path, or conflict with an
+        existing deny). Refusing with an empty list is a correct and expected
+        outcome, not a failure.
+      parameters:
+        type: object
+        properties:
+          path_trace:
+            type: string
+            description: >-
+              Step-by-step explanation of how the traffic flows: which firewall
+              interface subnet contains the source, which route the traffic
+              follows to the destination, and the resulting ingress/egress zone
+              on each device. This is what the human reviewer reads to verify
+              correctness.
+          rules:
+            type: array
+            description: >-
+              One security rule per firewall on the path that needs a new allow
+              rule. Omit a firewall if it already has a rule covering this flow.
+              MUST be an empty array when the requested port matches no entry in
+              the authoritative application list — never invent or guess an
+              application name, even as a placeholder for a custom App-ID.
+            items:
+              type: object
+              properties:
+                rule_name:
+                  type: string
+                  description: "Descriptive rule name, e.g. ALLOW-APP-TO-CORE-SSH-CHG0042"
+                source_zone:
+                  type: array
+                  items:
+                    type: string
+                  description: "Ingress zone(s) on this firewall"
+                source_ip:
+                  type: array
+                  items:
+                    type: string
+                  description: "Source IP(s) from the request"
+                destination_zone:
+                  type: array
+                  items:
+                    type: string
+                  description: "Egress zone(s) on this firewall"
+                destination_ip:
+                  type: array
+                  items:
+                    type: string
+                  description: "Destination IP(s) from the request"
+                application:
+                  type: array
+                  items:
+                    type: string
+                  description: "PAN-OS App-ID(s) from the authoritative list only, e.g. ['ssh']"
+                service:
+                  type: array
+                  items:
+                    type: string
+                  description: "Service, typically ['application-default']"
+                action:
+                  type: string
+                  description: "Rule action: allow or deny"
+                log_end:
+                  type: boolean
+                  description: "Log at session end"
+                rule_type:
+                  type: string
+                  description: "Rule type, typically 'universal'"
+                location:
+                  type: string
+                  description: "Placement: 'before'"
+                existing_rule:
+                  type: string
+                  description: "Anchor rule for placement, e.g. 'DENY-ANY-ANY'"
+                target_firewall:
+                  type: string
+                  description: "Hostname of the firewall this rule applies to"
+                description:
+                  type: string
+                  description: "Human-readable rule description"
+              required:
+                - rule_name
+                - source_zone
+                - source_ip
+                - destination_zone
+                - destination_ip
+                - application
+                - service
+                - action
+                - target_firewall
+          change_rationale:
+            type: string
+            description: >-
+              Human-readable summary for the PR body and the CAB approver
+              explaining why these rules are needed and any risk considerations.
+              When rules is empty, state why no rule can be authored and what
+              manual step is required.
+        required:
+          - path_trace
+          - rules
+          - change_rationale

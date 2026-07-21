@@ -1,0 +1,115 @@
+---
+- name: No rendered rules
+  when: (resolved_rules | default([])) | length == 0
+  block:
+    - name: Record that no change is required
+      ansible.builtin.debug:
+        msg: "No rule authored, no PR opened. AI rationale: {{ change_rationale | default('n/a') }}"
+
+    - name: Close the request as incomplete — no rule can be authored
+      ansible.builtin.include_role:
+        name: snow_ticket
+      vars:
+        snow_action: incomplete
+        snow_work_note: >-
+          No firewall change proposed for this request.
+          AI assessment: {{ change_rationale | default('no rationale returned') }}
+
+    - name: End propose_change early
+      ansible.builtin.meta: end_play
+
+- name: Ensure repo is cloned locally
+  ansible.builtin.include_tasks: ensure_repo.yml
+
+- name: Configure git identity for the bot commit
+  ansible.builtin.command:
+    cmd: git config --global {{ item.name }} "{{ item.value }}"
+  loop:
+    - { name: "user.name", value: "{{ propose_git_user_name }}" }
+    - { name: "user.email", value: "{{ propose_git_user_email }}" }
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+
+- name: Create/reset the change branch from main
+  ansible.builtin.command:
+    cmd: "git checkout -B {{ change_branch }} {{ git_main_branch | default('main') }}"
+    chdir: "{{ repo_root }}"
+  changed_when: true
+
+- name: Identify the firewalls the rendered rules target
+  ansible.builtin.set_fact:
+    target_firewalls: "{{ resolved_rules | map(attribute='target_firewall') | unique | list }}"
+
+- name: Render security_rules.yml with proposed rules appended
+  ansible.builtin.template:
+    src: security_rules.yml.j2
+    dest: "{{ repo_root }}/host_vars/{{ target_fw }}/security_rules.yml"
+    mode: "0644"
+  loop: "{{ target_firewalls }}"
+  loop_control:
+    loop_var: target_fw
+  vars:
+    existing_rules: "{{ (lookup('ansible.builtin.file',
+                                repo_root ~ '/host_vars/' ~ target_fw ~ '/security_rules.yml',
+                                errors='ignore') | from_yaml | default({}, true)).fw_security_rules | default([]) }}"
+    fw_rules: "{{ resolved_rules | selectattr('target_firewall', 'equalto', target_fw) | list }}"
+
+- name: Stage and commit the proposed rules
+  ansible.builtin.shell:
+    cmd: >-
+      git add host_vars &&
+      git commit -m "{{ request.number | default('CHGXXXX') }}: add AI-proposed firewall rule(s)"
+    chdir: "{{ repo_root }}"
+  register: commit_result
+  changed_when: "'nothing to commit' not in commit_result.stdout"
+  failed_when:
+    - commit_result.rc != 0
+    - "'nothing to commit' not in commit_result.stdout"
+
+- name: Push branch and open the PR (requires a GitHub token + remote)
+  when: github_token | default('') | length > 0
+  block:
+    - name: Push the change branch
+      ansible.builtin.command:
+        cmd: "git push https://x-access-token:{{ github_token }}@github.com/{{ git_repo_slug }}.git {{ change_branch }} --force"
+        chdir: "{{ repo_root }}"
+      changed_when: true
+      no_log: true
+
+    - name: Render the PR body
+      ansible.builtin.set_fact:
+        pr_body: "{{ lookup('template', playbook_dir ~ '/../templates/pr_body.j2') }}"
+      vars:
+        authored_rules: "{{ resolved_rules }}"
+        analysis: "{{ change_rationale | default('') }}"
+        path_trace: "{{ path_trace | default('') }}"
+
+    - name: Open the pull request
+      ansible.builtin.uri:
+        url: "{{ github_api_url }}/repos/{{ git_repo_slug }}/pulls"
+        method: POST
+        headers:
+          Authorization: "token {{ github_token }}"
+          Accept: "application/vnd.github+json"
+        body_format: json
+        body:
+          title: "{{ request.number | default('CHGXXXX') }}: AI-proposed firewall rule"
+          head: "{{ change_branch }}"
+          base: "{{ git_main_branch | default('main') }}"
+          body: "{{ pr_body }}"
+        status_code: [201]
+      register: pr_response
+      no_log: true
+
+    - name: Publish PR identifiers downstream
+      ansible.builtin.set_stats:
+        data:
+          pr_number: "{{ pr_response.json.number }}"
+          pr_url: "{{ pr_response.json.html_url }}"
+          change_branch: "{{ change_branch }}"
+        aggregate: false
+
+    - name: Show the opened PR
+      ansible.builtin.debug:
+        msg: "Opened PR #{{ pr_response.json.number }} ({{ pr_response.json.html_url }}) — awaiting engineer approval (Gate 1)."

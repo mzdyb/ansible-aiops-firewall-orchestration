@@ -1,0 +1,21 @@
+---
+fw_security_rules:
+  - rule_name: "DENY-ANY-ANY"
+    description: "Default deny -- log all blocked sessions"
+    source_zone: ["any"]
+    source_ip: ["any"]
+    source_user: ["any"]
+    destination_zone: ["any"]
+    destination_ip: ["any"]
+    application: ["any"]
+    service: ["any"]
+    category: ["any"]
+    action: "deny"
+    log_start: false
+    log_end: true
+    rule_type: "universal"
+    negate_source: false
+    negate_destination: false
+    disabled: false
+    location: "bottom"
+    state: present

@@ -1,0 +1,8 @@
+clab-*/
+ansible-navigator.log
+*-artifact-*
+*.vault
+.env
+.ansible/
+venv/
+local/

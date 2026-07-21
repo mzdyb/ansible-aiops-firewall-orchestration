@@ -1,0 +1,45 @@
+---
+- name: Deploy the approved FW rules and rollback on failure
+  hosts: pa_fw
+  connection: local
+  any_errors_fatal: true   # any host failure triggers rollback on both firewalls
+
+  tasks:
+    - name: Identify the originating request (RITM) from the change branch
+      ansible.builtin.set_fact:
+        request:
+          number: "{{ change_branch | basename }}"
+          table: "{{ snow_request_table }}"
+
+    - name: Look up the RITM in ServiceNow
+      servicenow.itsm.api_info:
+        instance: "{{ servicenow_instance }}"
+        resource: "{{ snow_request_table }}"
+        sysparm_query: "number={{ request.number }}"
+      register: _ritm_lookup
+      delegate_to: localhost
+      run_once: true
+      when: servicenow_instance.host | default('') | length > 0
+
+    - name: Add the RITM sys_id to the request
+      ansible.builtin.set_fact:
+        request: "{{ request | combine({'sys_id': (_ritm_lookup.record | default([]) | first | default({})).sys_id | default('')}) }}"
+      when: servicenow_instance.host | default('') | length > 0
+
+    - name: Deploy and close, rollback on failure
+      block:
+        - name: Deploy the rules, validate, merge the PR and close the CHG
+          ansible.builtin.include_role:
+            name: fw_deploy
+      rescue:
+        - name: Roll back the firewalls and back out the change
+          ansible.builtin.include_role:
+            name: fw_rollback
+      always:
+        - name: Report the final outcome
+          ansible.builtin.debug:
+            msg: >-
+              {{ change_id | default(request.number | default('change')) }} run complete.
+              Source of truth ({{ git_main_branch | default('main') }}) is updated only on a
+              fully successful deploy.
+          run_once: true

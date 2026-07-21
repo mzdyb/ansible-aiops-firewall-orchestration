@@ -1,0 +1,36 @@
+---
+- name: Render the change-request description (AI summary + change details)
+  ansible.builtin.set_fact:
+    snow_change_description: "{{ lookup('template', playbook_dir ~ '/../templates/chg_description.j2') }}"
+
+- name: Create the change request
+  servicenow.itsm.change_request:
+    instance: "{{ servicenow_instance }}"
+    # 'normal' means CAB approval is required (Human Gate 2)
+    type: normal
+    state: new
+    short_description: "Firewall rule deployment for {{ request.number | default('access request') }}"
+    description: "{{ snow_change_description }}"
+    other:
+      u_originating_request: "{{ request.number | default('') }}"
+      u_change_branch: "{{ change_branch | default('') }}"
+      u_pr_number: "{{ pr_number | default('') }}"
+  register: snow_change
+
+- name: Publish the change-request identifiers downstream
+  ansible.builtin.set_stats:
+    data:
+      chg_number: "{{ snow_change.record.number }}"
+      chg_sys_id: "{{ snow_change.record.sys_id }}"
+    aggregate: false
+
+- name: Move the originating request to Pending Deployment
+  servicenow.itsm.api:
+    instance: "{{ servicenow_instance }}"
+    resource: "{{ request.table | default(snow_request_table) }}"
+    action: patch
+    sys_id: "{{ request.sys_id }}"
+    data:
+      state: "{{ snow_request_states['pending_deployment'] }}"
+      work_notes: "Change request {{ snow_change.record.number }} created and submitted for approval."
+  when: request.sys_id | default('') | length > 0

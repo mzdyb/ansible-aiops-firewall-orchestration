@@ -1,0 +1,41 @@
+---
+# Managed by the AI firewall change pipeline.
+# Last change: {{ request.number | default('CHGXXXX') }}.
+{% macro rule(r) -%}
+- rule_name: {{ r.rule_name | to_json }}
+  description: {{ r.description | default('') | to_json }}
+  source_zone: {{ r.source_zone | to_json }}
+  source_ip: {{ r.source_ip | to_json }}
+  source_user: {{ r.source_user | default(['any']) | to_json }}
+  destination_zone: {{ r.destination_zone | to_json }}
+  destination_ip: {{ r.destination_ip | to_json }}
+  application: {{ r.application | to_json }}
+  service: {{ r.service | to_json }}
+  category: {{ r.category | default(['any']) | to_json }}
+  action: {{ r.action | to_json }}
+  log_start: {{ r.log_start | default(false) | to_json }}
+  log_end: {{ r.log_end | default(true) | to_json }}
+  rule_type: {{ r.rule_type | default('universal') | to_json }}
+  negate_source: {{ r.negate_source | default(false) | to_json }}
+  negate_destination: {{ r.negate_destination | default(false) | to_json }}
+  disabled: {{ r.disabled | default(false) | to_json }}
+  location: {{ r.location | default('before') | to_json }}
+{% if r.existing_rule is defined %}
+  existing_rule: {{ r.existing_rule | to_json }}
+{% endif %}
+  state: {{ r.state | default('present') }}
+{%- endmacro %}
+{# File order mirrors evaluation order: new rules go before the bottom-anchored
+   deny. Placement on the device is still driven by location/existing_rule. #}
+fw_security_rules:
+{% for r in existing_rules if (r.location | default('')) != 'bottom' %}
+{{ rule(r) | indent(width=2, first=true) }}
+
+{% endfor %}
+{% for r in fw_rules if r.rule_name not in (existing_rules | map(attribute='rule_name') | list) %}
+{{ rule(r) | indent(width=2, first=true) }}
+
+{% endfor %}
+{% for r in existing_rules if (r.location | default('')) == 'bottom' %}
+{{ rule(r) | indent(width=2, first=true) }}
+{% endfor %}

@@ -1,0 +1,193 @@
+{# LLM traces the traffic path, resolves zones and authors the rules.
+   network_state.devices has per-firewall interfaces, zones, routes, rules. #}
+A firewall access request needs security rules authored. You are given the raw
+state of both firewalls below. Trace the traffic path, resolve the zones on each
+device, check existing rules for coverage, and call submit_firewall_rules with
+the path trace, the rules, and a change rationale.
+
+## Connectivity request
+- Source:        {{ network_state.request.source_ip }}
+- Destination:   {{ network_state.request.destination_ip }}
+- Protocol/port: {{ network_state.request.protocol }}/{{ network_state.request.port }}
+- Requested by:  {{ network_state.request.requester | default('unknown') }}
+- Ticket:        {{ network_state.request.number | default('n/a') }}
+
+## Firewall device state
+{% for fw in network_state.devices | sort %}
+{% set dev = network_state.devices[fw] %}
+### {{ fw }}
+
+**Interfaces:**
+{% for iface in dev.interfaces | default([]) %}
+- {{ iface.if_name }}: IP {{ iface.ip | default([]) | join(', ') }}, zone {{ iface.zone_name | default('unknown') }}, mode {{ iface.mode | default('layer3') }}
+{% endfor %}
+
+**Zones:**
+{% for z in dev.zones | default([]) %}
+- {{ z.zone }}: interfaces {{ z.interfaces | join(', ') }}
+{% endfor %}
+
+**Static routes:**
+{% for r in dev.routes | default([]) %}
+- {{ r.name }}: {{ r.destination }} → nexthop {{ r.nexthop }}
+{% endfor %}
+{% if (dev.routes | default([])) | length == 0 %}
+- (no static routes)
+{% endif %}
+
+**Existing security rules (list order is NOT evaluation order — the placement
+field decides where each rule sits in the rulebase):**
+{% for r in dev.rules | default([]) %}
+  {{ loop.index }}. {{ r.rule_name }} | action={{ r.action }} | from={{ r.source_zone | join(',') }} to={{ r.destination_zone | join(',') }} | src={{ r.source_ip | join(',') }} dst={{ r.destination_ip | join(',') }} | app={{ r.application | join(',') }} | svc={{ r.service | join(',') }} | placement={{ r.location | default('as-listed') }}{% if r.existing_rule is defined %} {{ r.existing_rule }}{% endif %}
+{% endfor %}
+
+Config drift: {{ network_state.drift[fw] | default('ok') }}
+
+{% endfor %}
+
+## Well-known PAN-OS predefined applications
+- ssh: tcp/22
+- dns: tcp/53, udp/53
+- ssl: tcp/443
+- web-browsing: tcp/80, tcp/443
+- mysql: tcp/3306
+- postgres: tcp/5432
+- ms-sql-db: tcp/1433
+
+## How to trace the path (follow this method)
+
+1. **Locate the source IP**: find which firewall has an interface whose subnet
+   contains the source IP. That firewall is the FIRST hop. The interface's zone
+   is the INGRESS zone on that device.
+2. **Find the exit on the first firewall**: look at the static routes — which
+   route covers the destination IP? The nexthop of that route will be on one of
+   the firewall's interfaces. That interface's zone is the EGRESS zone.
+3. **Follow to the next device**: the nexthop connects to the next device
+   (router or firewall). Repeat: on the next firewall, find the interface whose
+   subnet contains the previous hop's nexthop — that's the INGRESS zone. Then
+   check if the destination is directly connected or needs another route hop.
+4. **Destination reached**: the firewall whose interface subnet contains the
+   destination IP is the LAST hop. That interface's zone is the EGRESS zone.
+
+The zone pair on each device is: from=INGRESS zone, to=EGRESS zone.
+
+## Worked examples
+
+The examples below use a DIFFERENT network than the request you are solving —
+they only demonstrate the tracing method. Example topology:
+
+- fw-branch: ethernet1/3 = 172.16.10.1/24 (zone USERS),
+  ethernet1/4 = 10.0.0.1/30 (zone TRANSIT);
+  route to-datacenter: 172.16.40.0/24 → nexthop 10.0.0.2;
+  rules: ALLOW-USERS-TO-TRANSIT-SSH-CHG0407 (from=USERS to=TRANSIT,
+  src=172.16.10.0/24, dst=172.16.40.0/24, app=ssh),
+  ALLOW-USERS-TO-TRANSIT-DNS-CHG0112 (from=USERS to=TRANSIT,
+  src=172.16.10.0/24, dst=203.0.113.53/32, app=dns), DENY-ALL (bottom).
+- fw-dc: ethernet1/3 = 10.0.0.6/30 (zone TRANSIT),
+  ethernet1/4 = 172.16.40.1/24 (zone SRV);
+  route to-branch: 172.16.10.0/24 → nexthop 10.0.0.5;
+  rules: DENY-ALL (bottom).
+
+### Example A: SSH from 172.16.10.20 to 172.16.40.8 (one rule needed)
+
+**Trace:**
+- Source 172.16.10.20 is in subnet 172.16.10.0/24 → fw-branch ethernet1/3
+  (zone USERS). That is the ingress interface on fw-branch, so from_zone=USERS.
+- On fw-branch, route to-datacenter covers 172.16.40.0/24 with nexthop 10.0.0.2.
+  The nexthop 10.0.0.2 is in the same /30 as ethernet1/4 (10.0.0.1/30, zone
+  TRANSIT). So fw-branch egress is to_zone=TRANSIT. Branch pair: USERS → TRANSIT.
+- Traffic transits to fw-dc. On fw-dc, the interface in the path's subnet range
+  is ethernet1/3 (10.0.0.6/30, zone TRANSIT). Traffic enters here, so
+  from_zone=TRANSIT.
+- Destination 172.16.40.8 is in subnet 172.16.40.0/24 → fw-dc ethernet1/4
+  (zone SRV). So to_zone=SRV. DC pair: TRANSIT → SRV.
+- Result: fw-branch USERS→TRANSIT, fw-dc TRANSIT→SRV (asymmetric — a different
+  zone pair on each device).
+
+Check existing rules:
+- fw-branch: ALLOW-USERS-TO-TRANSIT-SSH-CHG0407 covers USERS→TRANSIT for ssh
+  with src 172.16.10.0/24 (includes .20) and dst 172.16.40.0/24 (includes .8).
+  Already covered — no rule needed on fw-branch.
+- fw-dc: no rule covers ssh TRANSIT→SRV. Need a rule.
+
+Rules: one rule on fw-dc only (TRANSIT→SRV, ssh, source 172.16.10.20/32,
+dest 172.16.40.8/32, before DENY-ALL).
+
+### Example B: PostgreSQL from 172.16.40.8 to 172.16.10.20 (reverse direction)
+
+**Trace:**
+- Source 172.16.40.8 is in 172.16.40.0/24 → fw-dc ethernet1/4 (zone SRV).
+  Ingress on fw-dc: from_zone=SRV.
+- On fw-dc, route to-branch covers 172.16.10.0/24 with nexthop 10.0.0.5. That
+  nexthop is in the same /30 as ethernet1/3 (10.0.0.6/30, zone TRANSIT).
+  Egress: to_zone=TRANSIT. DC pair: SRV → TRANSIT.
+- On fw-branch, traffic arrives on ethernet1/4 (10.0.0.1/30, zone TRANSIT).
+  from_zone=TRANSIT.
+- Destination 172.16.10.20 is in 172.16.10.0/24 → ethernet1/3 (zone USERS).
+  to_zone=USERS. Branch pair: TRANSIT → USERS.
+- Result: fw-dc SRV→TRANSIT, fw-branch TRANSIT→USERS (zones are the REVERSE of
+  Example A — direction matters). The existing SSH rule covers neither device
+  in this direction: two rules needed.
+
+### Example C: DNS from 172.16.10.20 to 172.16.40.8 (existing rule does NOT cover)
+
+**Trace:** Same path as Example A — fw-branch USERS→TRANSIT, fw-dc TRANSIT→SRV.
+
+Check existing rules:
+- fw-branch: ALLOW-USERS-TO-TRANSIT-DNS-CHG0112 exists but covers only
+  dst 203.0.113.53/32, not 172.16.40.8. Not covered — need a rule.
+- fw-dc: no DNS rule exists for TRANSIT→SRV. Need a rule.
+
+Rules: two rules needed (one per firewall). A rule with the right zones and app
+but the wrong destination does not count as coverage.
+
+## Your task
+
+Trace the path for this specific connectivity request:
+- Source IP:      {{ network_state.request.source_ip }}
+- Destination IP: {{ network_state.request.destination_ip }}
+- Protocol/port:  {{ network_state.request.protocol }}/{{ network_state.request.port }}
+- Ticket:         {{ network_state.request.number | default('n/a') }}
+
+Then call submit_firewall_rules with:
+- **path_trace**: your step-by-step trace (like the examples above)
+- **rules**: one rule per firewall that needs one, with:
+  - rule_name: ALLOW-{FROM_ZONE}-TO-{TO_ZONE}-{APP}-{TICKET} format
+  - source_zone, destination_zone: from the trace
+  - source_ip: use exactly {{ network_state.request.source_ip }}
+  - destination_ip: use exactly {{ network_state.request.destination_ip }}
+  - application: the PAN-OS App-ID matching the protocol/port
+  - service: ["application-default"]
+  - action: "allow"
+  - log_end: true
+  - rule_type: "universal"
+  - location: "before"
+  - existing_rule: "DENY-ANY-ANY"
+  - target_firewall: hostname of the device
+  - description: brief description of what the rule permits
+- **change_rationale**: why the rules are needed, risk assessment
+
+IMPORTANT: Use the exact IP addresses from the request. source_ip must be
+["{{ network_state.request.source_ip }}"] and destination_ip must be
+["{{ network_state.request.destination_ip }}"]. Do NOT use placeholders.
+
+If an existing rule already covers the flow on a firewall, skip that firewall
+and note it in the path trace and rationale.
+
+Treat the well-known application list above as authoritative and exhaustive.
+If the requested protocol/port does not match an entry in that list, do NOT
+author rules — even if you know a PAN-OS App-ID for that port. Return an empty
+rules list and state in change_rationale that the request needs manual review
+(an engineer must confirm or create the App-ID before a rule can be authored).
+
+If an existing deny rule on any firewall explicitly blocks the requested flow
+(matching zones, application, and overlapping source/destination), the whole
+request conflicts with intentional policy — do NOT author allow rules on ANY
+device, including devices without the deny. Return an empty rules list and
+state in change_rationale that the request conflicts with existing security
+policy and requires a policy exception approved outside this automation.
+
+If the source or destination IP is not contained in any interface subnet of
+any firewall, the path cannot be traced — do NOT guess zones. Return an empty
+rules list and state in change_rationale that the request is outside the known
+topology and needs manual review.

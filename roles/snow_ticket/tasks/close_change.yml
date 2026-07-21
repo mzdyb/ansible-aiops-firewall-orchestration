@@ -1,0 +1,17 @@
+---
+- name: Close the change request as successful
+  servicenow.itsm.change_request:
+    instance: "{{ servicenow_instance }}"
+    sys_id: "{{ chg_sys_id }}"
+    state: closed
+    close_code: "{{ snow_change_close_code }}"
+    close_notes: "{{ snow_work_note | default('Firewall rule deployed and validated. PR merged to source of truth.') }}"
+  when: snow_action == 'close_change'
+
+- name: Back out the change request
+  servicenow.itsm.change_request:
+    instance: "{{ servicenow_instance }}"
+    sys_id: "{{ chg_sys_id }}"
+    state: "{{ snow_change_backout_state }}"
+    close_notes: "{{ snow_work_note | default('Change backed out; firewall restored from pre-change snapshot. Source of truth untouched.') }}"
+  when: snow_action == 'back_out_change'

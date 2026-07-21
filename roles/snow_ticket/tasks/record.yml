@@ -1,0 +1,19 @@
+---
+- name: Build the record patch payload
+  ansible.builtin.set_fact:
+    snow_record_data: >-
+      {{
+        ({'state': snow_request_states[snow_action]} if snow_action in snow_request_states else {})
+        | combine({'work_notes': snow_work_note} if (snow_work_note | length > 0) else {})
+      }}
+
+- name: Patch the ServiceNow request record
+  servicenow.itsm.api:
+    instance: "{{ servicenow_instance }}"
+    resource: "{{ request.table | default(snow_request_table) }}"
+    action: patch
+    sys_id: "{{ request.sys_id }}"
+    data: "{{ snow_record_data }}"
+  when:
+    - request.sys_id | default('') | length > 0
+    - snow_record_data | length > 0

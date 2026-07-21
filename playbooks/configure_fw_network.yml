@@ -1,0 +1,51 @@
+---
+- name: Configure firewall network
+  hosts: pa_fw
+  connection: local
+
+  tasks:
+    - name: Configure FW interfaces
+      paloaltonetworks.panos.panos_interface:
+        provider: "{{ panos_provider }}"
+        if_name: "{{ item.if_name }}"
+        mode: "{{ item.mode }}"
+        ip: "{{ item.ip }}"
+        enable_dhcp: "{{ item.enable_dhcp }}"
+        vr_name: "{{ item.vr_name | default('default') }}"
+        zone_name: "{{ item.zone_name | default(omit) }}"
+        commit: false
+        state: "{{ fw_config_state | default(item.state | default('present')) }}"
+      loop: "{{ fw_interfaces }}"
+      tags: network
+
+    - name: Configure virtual router
+      paloaltonetworks.panos.panos_virtual_router:
+        provider: "{{ panos_provider }}"
+        name: "{{ fw_virtual_router.name }}"
+        interface: "{{ fw_virtual_router.interfaces }}"
+        commit: false
+        state: "{{ fw_config_state | default(fw_virtual_router.state | default('present')) }}"
+      tags: network
+
+    - name: Configure static routes
+      paloaltonetworks.panos.panos_static_route:
+        provider: "{{ panos_provider }}"
+        virtual_router: "{{ item.virtual_router }}"
+        name: "{{ item.name }}"
+        destination: "{{ item.destination }}"
+        nexthop: "{{ item.nexthop }}"
+        metric: "{{ item.metric }}"
+        state: "{{ fw_config_state | default(item.state | default('present')) }}"
+      loop: "{{ fw_static_routes }}"
+      tags: network
+
+    - name: Configure zones
+      paloaltonetworks.panos.panos_zone:
+        provider: "{{ panos_provider }}"
+        zone: "{{ item.zone }}"
+        mode: "{{ item.mode }}"
+        interface: "{{ item.interfaces }}"
+        enable_userid: "{{ item.enable_userid }}"
+        state: "{{ fw_config_state | default(item.state | default('present')) }}"
+      loop: "{{ fw_zones }}"
+      tags: zones

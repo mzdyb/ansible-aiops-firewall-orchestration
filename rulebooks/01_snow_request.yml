@@ -1,0 +1,25 @@
+---
+- name: ServiceNow firewall connectivity request
+  hosts: all
+  sources:
+    - ansible.eda.webhook:
+        host: 0.0.0.0
+        port: 5001
+
+  rules:
+    - name: New firewall connectivity request received
+      condition: event.payload.type == "firewall_connectivity_request"
+      action:
+        run_job_template:
+          name: "AI FW - Process connectivity request"
+          organization: "Default"
+          job_args:
+            extra_vars:
+              intake_event:
+                source_ip_mask: "{{ event.payload.source_host }}"
+                destination_ip_mask: "{{ event.payload.destination_host }}"
+                protocol: "{{ event.payload.protocol }}"
+                ports: "{{ event.payload.ports }}"
+                ritm_number: "{{ event.payload.ritm_number }}"
+                sys_id: "{{ event.payload.sys_id }}"
+                requester: "{{ event.payload.requester }}"

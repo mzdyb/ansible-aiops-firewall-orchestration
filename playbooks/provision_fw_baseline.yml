@@ -1,0 +1,9 @@
+---
+- name: Provision firewall network configuration
+  ansible.builtin.import_playbook: configure_fw_network.yml
+
+- name: Provision baseline security policies
+  ansible.builtin.import_playbook: configure_fw_security_policies.yml
+
+- name: Commit the candidate configuration
+  ansible.builtin.import_playbook: commit_fw_config.yml

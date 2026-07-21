@@ -1,0 +1,13 @@
+---
+fw_zones:
+  - zone: "APP"
+    mode: "layer3"
+    interfaces: ["ethernet1/1"]
+    enable_userid: false
+    state: present
+
+  - zone: "CORE"
+    mode: "layer3"
+    interfaces: ["ethernet1/2"]
+    enable_userid: false
+    state: present

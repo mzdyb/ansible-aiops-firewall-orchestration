@@ -1,0 +1,20 @@
+---
+- name: "Report skipped ServiceNow action: {{ snow_action }}"
+  ansible.builtin.debug:
+    msg: "servicenow_instance.host is empty; skipping SN action '{{ snow_action }}'."
+  when: servicenow_instance.host | default('') | length == 0
+
+- name: "Dispatch ServiceNow action: {{ snow_action }}"
+  when: servicenow_instance.host | default('') | length > 0
+  block:
+    - name: Update the request record (state and/or work note)
+      ansible.builtin.include_tasks: record.yml
+      when: snow_action in ['in_progress', 'incomplete', 'work_note', 'close_request']
+
+    - name: Create the change request
+      ansible.builtin.include_tasks: create_change.yml
+      when: snow_action == 'create_change'
+
+    - name: Close or back out the change request
+      ansible.builtin.include_tasks: close_change.yml
+      when: snow_action in ['close_change', 'back_out_change']

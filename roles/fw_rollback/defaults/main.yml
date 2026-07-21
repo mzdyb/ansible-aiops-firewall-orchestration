@@ -1,0 +1,3 @@
+---
+change_id: "{{ request.number | default('CHGXXXX') }}"
+snapshot_name: "pre-{{ change_id }}.xml"

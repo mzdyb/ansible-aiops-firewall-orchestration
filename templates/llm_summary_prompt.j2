@@ -1,0 +1,25 @@
+{# Step 8 (summary mode) user message: request + approved rule(s) -> change summary.
+   approved_rules is the list read back from the approved PR branch. #}
+Write a concise change-request summary (plain text, a few short sentences) for the
+following approved firewall change.
+
+## Original request
+- Source:        {{ network_state.request.source_ip | default(request.source_ip | default('n/a')) }}
+- Destination:   {{ network_state.request.destination_ip | default(request.destination_ip | default('n/a')) }}
+- Ticket:        {{ request.number | default(network_state.request.number | default('n/a')) }}
+
+## Approved rule(s) to be deployed
+{% for r in approved_rules %}
+- {{ r.rule_name }} on {{ r.target_firewall | default('unknown') }}:
+  permit {{ r.application | join(',') }} from {{ r.source_zone | join(',') }} {{ r.source_ip | join(',') }}
+  to {{ r.destination_zone | join(',') }} {{ r.destination_ip | join(',') }},
+  inserted {{ r.location | default('before') }} {{ r.existing_rule | default('DENY-ANY-ANY') }}.
+  Description: {{ r.description | default('n/a') }}
+{% endfor %}
+
+## Change rationale (from the AI path trace)
+{{ change_rationale | default('n/a') }}
+
+Cover: what the change permits, on which firewall, the business/technical reason,
+the risk level and blast radius, and that rollback restores a pre-change config
+snapshot. Do not use markdown headers.

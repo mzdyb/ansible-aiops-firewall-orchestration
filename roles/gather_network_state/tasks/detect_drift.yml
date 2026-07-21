@@ -1,0 +1,233 @@
+---
+# Two-phase drift detection, see the detailed explanation in the following repository:
+# https://github.com/mzdyb/paloalto
+
+- name: "Drift Phase 1 — check interfaces for modifications"
+  paloaltonetworks.panos.panos_interface:
+    provider: "{{ panos_provider }}"
+    if_name: "{{ item.if_name }}"
+    mode: "{{ item.mode }}"
+    ip: "{{ item.ip }}"
+    enable_dhcp: "{{ item.enable_dhcp }}"
+    create_default_route: "{{ item.create_default_route }}"
+    vr_name: "{{ item.vr_name | default('default') }}"
+    zone_name: "{{ item.zone_name | default(omit) }}"
+    commit: false
+    state: "{{ fw_config_state | default('present') }}"
+  loop: "{{ fw_interfaces | default([]) }}"
+  when: (item.state | default('present')) == 'present'
+  register: interface_drift
+  check_mode: true
+  diff: true
+  ignore_errors: true
+
+- name: "Drift Phase 1 — check security rules for modifications"
+  paloaltonetworks.panos.panos_security_rule:
+    provider: "{{ panos_provider }}"
+    rule_name: "{{ item.rule_name }}"
+    description: "{{ item.description | default(omit) }}"
+    source_zone: "{{ item.source_zone }}"
+    source_ip: "{{ item.source_ip }}"
+    source_user: "{{ item.source_user }}"
+    destination_zone: "{{ item.destination_zone }}"
+    destination_ip: "{{ item.destination_ip }}"
+    application: "{{ item.application }}"
+    service: "{{ item.service }}"
+    category: "{{ item.category }}"
+    action: "{{ item.action }}"
+    log_start: "{{ item.log_start }}"
+    log_end: "{{ item.log_end }}"
+    rule_type: "{{ item.rule_type }}"
+    negate_source: "{{ item.negate_source }}"
+    negate_destination: "{{ item.negate_destination }}"
+    disabled: "{{ item.disabled }}"
+    state: "{{ fw_rules_state | default('present') }}"
+  loop: "{{ fw_security_rules | default([]) }}"
+  when: (item.state | default('present')) == 'present'
+  register: security_drift
+  check_mode: true
+  diff: true
+  ignore_errors: true
+
+- name: "Drift Phase 1 — check zones for modifications"
+  paloaltonetworks.panos.panos_zone:
+    provider: "{{ panos_provider }}"
+    zone: "{{ item.zone }}"
+    mode: "{{ item.mode }}"
+    interface: "{{ item.interfaces }}"
+    enable_userid: "{{ item.enable_userid }}"
+    state: "{{ fw_config_state | default('present') }}"
+  loop: "{{ fw_zones | default([]) }}"
+  when: (item.state | default('present')) == 'present'
+  register: zone_drift
+  check_mode: true
+  diff: true
+  ignore_errors: true
+
+- name: "Drift Phase 1 — check virtual router for modifications"
+  paloaltonetworks.panos.panos_virtual_router:
+    provider: "{{ panos_provider }}"
+    name: "{{ fw_virtual_router.name }}"
+    interface: "{{ fw_virtual_router.interfaces }}"
+    commit: false
+    state: "{{ fw_config_state | default('present') }}"
+  register: vrouter_drift
+  check_mode: true
+  diff: true
+  ignore_errors: true
+
+- name: "Drift Phase 1 — check static routes for modifications"
+  paloaltonetworks.panos.panos_static_route:
+    provider: "{{ panos_provider }}"
+    virtual_router: "{{ item.virtual_router }}"
+    name: "{{ item.name }}"
+    destination: "{{ item.destination }}"
+    nexthop: "{{ item.nexthop }}"
+    metric: "{{ item.metric }}"
+    state: "{{ fw_config_state | default('present') }}"
+  loop: "{{ fw_static_routes | default([]) }}"
+  when: (item.state | default('present')) == 'present'
+  register: route_drift
+  check_mode: true
+  diff: true
+  ignore_errors: true
+
+- name: "Drift Phase 2 — gather live security rules"
+  paloaltonetworks.panos.panos_security_rule:
+    provider: "{{ panos_provider }}"
+    gathered_filter: '*'
+    state: gathered
+  register: live_rules
+  check_mode: false
+  ignore_errors: true
+
+- name: "Drift Phase 2 — gather live zones"
+  paloaltonetworks.panos.panos_zone:
+    provider: "{{ panos_provider }}"
+    gathered_filter: '*'
+    state: gathered
+  register: live_zones
+  check_mode: false
+  ignore_errors: true
+
+- name: "Drift Phase 2 — gather live static routes"
+  paloaltonetworks.panos.panos_static_route:
+    provider: "{{ panos_provider }}"
+    virtual_router: "{{ fw_virtual_router.name }}"
+    gathered_filter: '*'
+    state: gathered
+  register: live_routes
+  check_mode: false
+  ignore_errors: true
+
+- name: "Drift Phase 2 — compute unauthorized additions"
+  ansible.builtin.set_fact:
+    unauthorized_rules: >-
+      {{ live_rules.gathered | default([]) | map(attribute='rule_name') | list
+         | difference(fw_security_rules | default([]) | map(attribute='rule_name') | list) }}
+    unauthorized_zones: >-
+      {{ live_zones.gathered | default([]) | map(attribute='zone') | list
+         | difference(fw_zones | default([]) | map(attribute='zone') | list) }}
+    unauthorized_routes: >-
+      {{ live_routes.gathered | default([]) | map(attribute='name') | list
+         | difference(fw_static_routes | default([]) | map(attribute='name') | list) }}
+  check_mode: false
+
+- name: "Drift Phase 2 — compare rulebase order"
+  ansible.builtin.set_fact:
+    rule_order_drift: >-
+      {{ (expected_rule_order | select('in', live_rule_order) | list)
+         != (live_rule_order | select('in', expected_rule_order) | list) }}
+  vars:
+    expected_rule_order: "{{ fw_security_rules | default([]) | map(attribute='rule_name') | list }}"
+    live_rule_order: "{{ live_rules.gathered | default([]) | map(attribute='rule_name') | list }}"
+  check_mode: false
+
+- name: Collect drifted items from Phase 1
+  ansible.builtin.set_fact:
+    drifted_interfaces: "{{ interface_drift.results | default([]) | selectattr('changed', 'equalto', true) | map(attribute='item.if_name') | list }}"
+    drifted_routes: "{{ route_drift.results | default([]) | selectattr('changed', 'equalto', true) | map(attribute='item.name') | list }}"
+    drifted_zones: "{{ zone_drift.results | default([]) | selectattr('changed', 'equalto', true) | map(attribute='item.zone') | list }}"
+    drifted_rules: "{{ security_drift.results | default([]) | selectattr('changed', 'equalto', true) | map(attribute='item.rule_name') | list }}"
+  check_mode: false
+
+- name: Collect checks that errored
+  ansible.builtin.set_fact:
+    failed_checks: >-
+      {{ {'interfaces': interface_drift.failed | default(false),
+          'security_rules': security_drift.failed | default(false),
+          'zones': zone_drift.failed | default(false),
+          'virtual_router': vrouter_drift.failed | default(false),
+          'static_routes': route_drift.failed | default(false),
+          'live_state_gather': (live_rules.failed | default(false)) or
+                               (live_zones.failed | default(false)) or
+                               (live_routes.failed | default(false))}
+         | dict2items | selectattr('value') | map(attribute='key') | list }}
+  check_mode: false
+
+- name: Compute drift flags
+  ansible.builtin.set_fact:
+    modification_drift_found: >-
+      {{ drifted_interfaces | length > 0 or
+         (vrouter_drift.changed | default(false)) or
+         drifted_routes | length > 0 or
+         drifted_zones | length > 0 or
+         drifted_rules | length > 0 or
+         (rule_order_drift | bool) or
+         failed_checks | length > 0 }}
+    unauthorized_additions_found: >-
+      {{ unauthorized_rules | length > 0 or
+         unauthorized_zones | length > 0 or
+         unauthorized_routes | length > 0 }}
+  check_mode: false
+
+- name: Set overall drift flag
+  ansible.builtin.set_fact:
+    drift_detected: "{{ modification_drift_found or unauthorized_additions_found }}"
+  check_mode: false
+
+# Shown in the job output and pasted into the ServiceNow drift work note
+- name: Build the drift report
+  ansible.builtin.set_fact:
+    host_drift_report: |-
+      ==== DRIFT REPORT: {{ inventory_hostname }} ====
+      Modified configuration:
+        Interfaces: {{ drifted_interfaces | join(', ') | default('none', true) }}
+        Virtual router: {{ 'DRIFTED' if (vrouter_drift.changed | default(false)) else 'none' }}
+        Static routes: {{ drifted_routes | join(', ') | default('none', true) }}
+        Zones: {{ drifted_zones | join(', ') | default('none', true) }}
+        Security rules: {{ drifted_rules | join(', ') | default('none', true) }}
+        Security rule order: {{ 'DRIFTED' if (rule_order_drift | bool) else 'none' }}
+      Unauthorized additions:
+        Security rules: {{ unauthorized_rules | join(', ') | default('none', true) }}
+        Zones: {{ unauthorized_zones | join(', ') | default('none', true) }}
+        Static routes: {{ unauthorized_routes | join(', ') | default('none', true) }}
+      Checks that errored (device could not be verified): {{ failed_checks | join(', ') | default('none', true) }}
+      Overall drift detected: {{ drift_detected }}
+  check_mode: false
+
+- name: Display drift report
+  ansible.builtin.debug:
+    msg: "{{ host_drift_report.split('\n') }}"
+  check_mode: false
+
+- name: Build per-host drift detail for main.yml assembly
+  ansible.builtin.set_fact:
+    host_drift_detail: >-
+      {{ 'ok' if not (drift_detected | bool) else {
+           'modified': {
+             'interfaces': drifted_interfaces,
+             'virtual_router': vrouter_drift.changed | default(false),
+             'static_routes': drifted_routes,
+             'zones': drifted_zones,
+             'security_rules': drifted_rules,
+             'rule_order': rule_order_drift | bool
+           },
+           'unauthorized': {
+             'security_rules': unauthorized_rules,
+             'zones': unauthorized_zones,
+             'static_routes': unauthorized_routes
+           },
+           'check_errors': failed_checks
+         } }}
+  check_mode: false

@@ -1,0 +1,10 @@
+---
+- name: Detect configuration drift on firewalls
+  hosts: pa_fw
+  connection: local
+
+  tasks:
+    - name: Run two-phase drift detection on each firewall
+      ansible.builtin.include_role:
+        name: gather_network_state
+        tasks_from: detect_drift

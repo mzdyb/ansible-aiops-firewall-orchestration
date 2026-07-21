@@ -1,0 +1,64 @@
+---
+# Managed by the AI firewall change pipeline.
+fw_security_rules:
+  - rule_name: "ALLOW-APP-TO-CORE-DNS-CHG0001"
+    description: "Example legacy DNS rule - destination 10.99.99.10 is not routable in this lab."
+    source_zone: ["APP"]
+    source_ip: ["10.10.10.0/24"]
+    source_user: ["any"]
+    destination_zone: ["CORE"]
+    destination_ip: ["10.99.99.10/32"]
+    application: ["dns"]
+    service: ["application-default"]
+    category: ["any"]
+    action: "allow"
+    log_start: false
+    log_end: true
+    rule_type: "universal"
+    negate_source: false
+    negate_destination: false
+    disabled: false
+    location: "before"
+    existing_rule: "DENY-ANY-ANY"
+    state: present
+
+  - rule_name: "ALLOW-APP-TO-CORE-POSTGRES-CHG0002"
+    description: "App tier to database tier PostgreSQL - provisioned with the edge segment."
+    source_zone: ["APP"]
+    source_ip: ["10.10.10.0/24"]
+    source_user: ["any"]
+    destination_zone: ["CORE"]
+    destination_ip: ["10.20.20.0/24"]
+    application: ["postgres"]
+    service: ["application-default"]
+    category: ["any"]
+    action: "allow"
+    log_start: false
+    log_end: true
+    rule_type: "universal"
+    negate_source: false
+    negate_destination: false
+    disabled: false
+    location: "before"
+    existing_rule: "DENY-ANY-ANY"
+    state: present
+
+  - rule_name: "DENY-ANY-ANY"
+    description: "Default deny - log all blocked sessions"
+    source_zone: ["any"]
+    source_ip: ["any"]
+    source_user: ["any"]
+    destination_zone: ["any"]
+    destination_ip: ["any"]
+    application: ["any"]
+    service: ["any"]
+    category: ["any"]
+    action: "deny"
+    log_start: false
+    log_end: true
+    rule_type: "universal"
+    negate_source: false
+    negate_destination: false
+    disabled: false
+    location: "bottom"
+    state: present

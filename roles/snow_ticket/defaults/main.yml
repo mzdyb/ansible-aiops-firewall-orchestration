@@ -1,0 +1,13 @@
+---
+snow_action: work_note
+snow_work_note: ""
+
+# ServiceNow's built-in state codes
+snow_request_states:
+  in_progress: "2"           # Work in Progress
+  incomplete: "4"            # Closed Incomplete (drift halt)
+  pending_deployment: "-5"   # Pending (awaiting CAB + deploy)
+  close_request: "3"         # Closed Complete
+
+snow_change_close_code: "successful"
+snow_change_backout_state: "canceled"

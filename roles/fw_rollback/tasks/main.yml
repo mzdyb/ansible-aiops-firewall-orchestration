@@ -1,0 +1,65 @@
+---
+- name: Capture the failure context
+  ansible.builtin.set_fact:
+    rollback_reason: >-
+      Deploy task failed: {{ ansible_failed_task.name | default('unknown') }}
+      -> {{ ansible_failed_result.msg | default('see job output') }}
+
+- name: Restore the pre-change snapshot on targeted firewalls
+  when: is_deploy_target | default(false) | bool
+  block:
+    - name: Load the pre-change config snapshot
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ panos_provider }}"
+        cmd: "load config from {{ snapshot_name }}"
+      changed_when: true
+
+    - name: Commit the restored configuration
+      paloaltonetworks.panos.panos_commit_firewall:
+        provider: "{{ panos_provider }}"
+  rescue:
+    - name: Snapshot restore failed
+      ansible.builtin.debug:
+        msg: "WARNING: snapshot restore failed on {{ inventory_hostname }}; manual check required."
+
+- name: Close the PR unmerged
+  ansible.builtin.uri:
+    url: "{{ github_api_url }}/repos/{{ git_repo_slug }}/pulls/{{ pr_number }}"
+    method: PATCH
+    headers:
+      Authorization: "token {{ github_token }}"
+      Accept: "application/vnd.github+json"
+    body_format: json
+    body:
+      state: closed
+    status_code: [200]
+  run_once: true
+  delegate_to: localhost
+  when:
+    - github_token | default('') | length > 0
+    - pr_number | default('') | string | length > 0
+  no_log: true
+  register: close_response
+  ignore_errors: true
+
+- name: Warn if the PR could not be closed
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: PR close failed: HTTP {{ close_response.status | default('none') }} —
+      {{ (close_response.json | default({})) | to_json | truncate(300) }}
+      {{ close_response.msg | default('') | truncate(200) }}
+  run_once: true
+  when:
+    - close_response is not skipped
+    - close_response.status | default(0) != 200
+
+- name: Back out the change request and notify
+  ansible.builtin.include_role:
+    name: snow_ticket
+    apply:
+      run_once: true
+      delegate_to: localhost
+  vars:
+    snow_action: back_out_change
+    snow_work_note: "{{ rollback_reason }} Firewall restored from snapshot {{ snapshot_name }}; PR closed unmerged; source of truth untouched."
+  run_once: true

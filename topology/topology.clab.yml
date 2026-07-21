@@ -1,0 +1,44 @@
+---
+name: fw-path-demo
+
+mgmt:
+  network: fw-path-mgmt
+  ipv4-subnet: 10.77.77.0/24
+
+topology:
+  nodes:
+    app-client-01:
+      kind: linux
+      image: wbitt/network-multitool:fedora
+      exec:
+        - ip addr add 10.10.10.5/24 dev eth1
+        - ip route replace default via 10.10.10.1
+
+    db-server-01:
+      kind: linux
+      image: wbitt/network-multitool:fedora
+      exec:
+        - ip addr add 10.20.20.5/24 dev eth1
+        - ip route replace default via 10.20.20.1
+
+    edge-fw-01:
+      kind: paloalto_panos
+      image: vrnetlab/paloalto_pa-vm:10.1.0
+      mgmt-ipv4: 10.77.77.10
+
+    dc-fw-01:
+      kind: paloalto_panos
+      image: vrnetlab/paloalto_pa-vm:10.1.0
+      mgmt-ipv4: 10.77.77.11
+
+    rtr-01:
+      kind: arista_ceos
+      image: ceos:4.36.0.1F
+      mgmt-ipv4: 10.77.77.12
+      startup-config: configs/rtr-01-startup.cfg
+
+  links:
+    - endpoints: ["app-client-01:eth1", "edge-fw-01:eth1"]
+    - endpoints: ["edge-fw-01:eth2", "rtr-01:eth1"]
+    - endpoints: ["rtr-01:eth2", "dc-fw-01:eth1"]
+    - endpoints: ["dc-fw-01:eth2", "db-server-01:eth1"]

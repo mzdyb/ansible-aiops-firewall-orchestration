@@ -1,0 +1,168 @@
+---
+- name: Ensure repo is cloned locally
+  ansible.builtin.include_role:
+    name: propose_change
+    tasks_from: ensure_repo
+    apply:
+      run_once: true
+      delegate_to: localhost
+  run_once: true
+
+- name: Check out the approved change branch
+  ansible.builtin.command:
+    cmd: "git checkout {{ change_branch }}"
+    chdir: "{{ repo_root }}"
+  run_once: true
+  delegate_to: localhost
+  changed_when: true
+
+- name: Re-validate - the change branch is ahead of the source of truth
+  ansible.builtin.command:
+    cmd: "git rev-list --count {{ git_main_branch | default('main') }}..{{ change_branch }}"
+    chdir: "{{ repo_root }}"
+  register: branch_ahead
+  run_once: true
+  delegate_to: localhost
+  changed_when: false
+  failed_when: (branch_ahead.stdout | default('0') | int) == 0
+
+# Re-check drift before implementation
+- name: Re-validate - load the baseline (main) security rules for the drift re-check
+  ansible.builtin.command:
+    cmd: "git show {{ git_main_branch | default('main') }}:host_vars/{{ inventory_hostname }}/security_rules.yml"
+    chdir: "{{ repo_root }}"
+  register: main_rules_raw
+  delegate_to: localhost
+  changed_when: false
+
+- name: Re-validate - re-run drift detection against the baseline SOT
+  ansible.builtin.include_role:
+    name: gather_network_state
+    tasks_from: detect_drift
+  vars:
+    fw_security_rules: "{{ (main_rules_raw.stdout | from_yaml).fw_security_rules | default([]) }}"
+
+- name: Re-validate - refuse to deploy onto a drifted device
+  ansible.builtin.assert:
+    that:
+      - not (drift_detected | default(false) | bool)
+    fail_msg: "Re-validation found config drift on {{ inventory_hostname }}; aborting deploy to trigger rollback."
+
+- name: Reload security rules from the approved branch's host_vars
+  ansible.builtin.include_vars:
+    file: "{{ repo_root }}/host_vars/{{ inventory_hostname }}/security_rules.yml"
+  failed_when: false
+
+- name: Validate rule placement anchors
+  ansible.builtin.assert:
+    that:
+      - fw_security_rules | default([]) | selectattr('existing_rule', 'defined')
+        | rejectattr('existing_rule', 'in',
+            fw_security_rules | default([]) | map(attribute='rule_name') | list)
+        | list | length == 0
+    fail_msg: "A rule's existing_rule references a rule not present in the SoT for {{ inventory_hostname }}"
+
+- name: Apply the change on both firewalls
+  when: (fw_security_rules | default([])) | length > 0
+  block:
+    - name: Snapshot the running config before the change
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ panos_provider }}"
+        cmd: "save config to {{ snapshot_name }}"
+      changed_when: true
+
+    - name: Mark this firewall as a deploy target so rollback restores it
+      ansible.builtin.set_fact:
+        is_deploy_target: true
+
+    - name: Apply security rules from host_vars
+      paloaltonetworks.panos.panos_security_rule:
+        provider: "{{ panos_provider }}"
+        rule_name: "{{ item.rule_name }}"
+        description: "{{ item.description | default(omit) }}"
+        source_zone: "{{ item.source_zone }}"
+        source_ip: "{{ item.source_ip }}"
+        source_user: "{{ item.source_user }}"
+        destination_zone: "{{ item.destination_zone }}"
+        destination_ip: "{{ item.destination_ip }}"
+        application: "{{ item.application }}"
+        service: "{{ item.service }}"
+        category: "{{ item.category }}"
+        action: "{{ item.action }}"
+        log_start: "{{ item.log_start }}"
+        log_end: "{{ item.log_end }}"
+        rule_type: "{{ item.rule_type }}"
+        negate_source: "{{ item.negate_source }}"
+        negate_destination: "{{ item.negate_destination }}"
+        disabled: "{{ item.disabled }}"
+        location: "{{ item.location | default(omit) }}"
+        existing_rule: "{{ item.existing_rule | default(omit) }}"
+        commit: false
+        state: "{{ fw_rules_state | default(item.state | default('present')) }}"
+      loop: "{{ fw_security_rules | default([]) }}"
+      tags: security_rules
+
+
+    - name: Validate the candidate configuration
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ panos_provider }}"
+        cmd: "validate full"
+      changed_when: false     # panos_op reports changed by default
+
+    - name: Check firewall connectivity
+      paloaltonetworks.panos.panos_op:
+        provider: "{{ panos_provider }}"
+        cmd: "show system info"
+      changed_when: false
+
+    - name: Commit configuration
+      paloaltonetworks.panos.panos_commit_firewall:
+        provider: "{{ panos_provider }}"
+
+- name: Merge the PR into the source-of-truth branch (only after both FWs validated)
+  ansible.builtin.uri:
+    url: "{{ github_api_url }}/repos/{{ git_repo_slug }}/pulls/{{ pr_number }}/merge"
+    method: PUT
+    headers:
+      Authorization: "token {{ github_token }}"
+      Accept: "application/vnd.github+json"
+    body_format: json
+    body:
+      commit_title: "{{ change_id }}: deploy AI-proposed firewall rule"
+      merge_method: squash
+    status_code: [200]
+  run_once: true
+  delegate_to: localhost
+  when:
+    - github_token | default('') | length > 0
+    - pr_number | default('') | string | length > 0
+  no_log: true
+  register: merge_response
+  ignore_errors: true
+
+- name: Fail with a safe diagnostic if the PR merge did not succeed
+  ansible.builtin.fail:
+    msg: >-
+      PR merge failed: HTTP {{ merge_response.status | default('none') }} —
+      {{ (merge_response.json | default({})) | to_json | truncate(300) }}
+      {{ merge_response.msg | default('') | truncate(200) }}
+  run_once: true
+  when:
+    - merge_response is not skipped
+    - merge_response.status | default(0) != 200
+
+- name: Close the change request and the originating request
+  ansible.builtin.include_role:
+    name: snow_ticket
+    apply:
+      run_once: true
+      delegate_to: localhost
+      ignore_errors: true
+  vars:
+    snow_action: "{{ item }}"
+    snow_work_note: "Deployed and validated on {{ change_id }}. PR #{{ pr_number | default('n/a') }} merged to source of truth."
+  loop:
+    - close_change
+    - close_request
+  run_once: true
+  ignore_errors: true

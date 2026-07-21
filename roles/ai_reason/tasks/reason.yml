@@ -1,0 +1,177 @@
+---
+- name: Render the authoring prompt from network_state
+  ansible.builtin.set_fact:
+    ai_user_prompt: "{{ lookup('template', ai_reason_prompt_dir ~ '/llm_authoring_prompt.j2') }}"
+
+- name: Check the LLM endpoint is reachable
+  ansible.builtin.uri:
+    url: "{{ llm_base_url | regex_replace('/$', '') }}/models"
+    method: GET
+    timeout: 10
+    status_code: [200, 401, 403]
+  changed_when: false
+
+- name: Call the LLM API
+  ansible.builtin.uri:
+    url: "{{ llm_base_url | regex_replace('/$', '') }}/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ llm_api_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{ {'model': llm_model,
+          'temperature': llm_temperature | default(0.0) | float,
+          'max_tokens': llm_max_tokens | default(4096) | int,
+          'provider': {'order': ['deepinfra'], 'allow_fallbacks': false},
+          'messages': [{'role': 'system', 'content': ai_reason_system_prompt},
+                       {'role': 'user', 'content': ai_user_prompt}],
+          'tools': ai_tool_schema,
+          'tool_choice': {'type': 'function',
+                          'function': {'name': 'submit_firewall_rules'}}} | to_json }}
+    timeout: "{{ llm_timeout | default(90) }}"
+    status_code: [200]
+  retries: 2
+  delay: 3
+  until: llm_response.status | default(0) == 200
+  register: llm_response
+  no_log: true
+  ignore_errors: true
+
+# Only status + server error body - not the request because it carries the key
+- name: Fail with a safe diagnostic if the LLM call did not succeed
+  ansible.builtin.fail:
+    msg: >-
+      LLM call failed: HTTP {{ llm_response.status | default('none') }} —
+      {{ (llm_response.json | default({})) | to_json | truncate(400) }}
+      {{ llm_response.msg | default('') | truncate(200) }}
+  when: llm_response.status | default(0) != 200
+
+- name: Fail clearly when the completion was truncated
+  ansible.builtin.fail:
+    msg: >-
+      LLM output truncated (finish_reason=length) — the tool-call JSON is
+      incomplete. Raise llm_max_tokens (currently
+      {{ llm_max_tokens | default(4096) }}).
+  when: llm_response.json.choices[0].finish_reason | default('') == 'length'
+
+- name: Check whether the response contains the tool call
+  ansible.builtin.set_fact:
+    _has_tool_call: >-
+      {{ llm_response.json.choices[0].message.tool_calls is defined
+         and (llm_response.json.choices[0].message.tool_calls | length) > 0
+         and llm_response.json.choices[0].message.tool_calls[0].function.name == 'submit_firewall_rules' }}
+
+- name: Extract the result from tool_calls (primary path)
+  when: _has_tool_call | bool
+  block:
+    - name: Parse the tool call arguments
+      ansible.builtin.set_fact:
+        _tc_args_raw: "{{ llm_response.json.choices[0].message.tool_calls[0].function.arguments }}"
+
+    - name: Decode the tool call arguments (JSON string or dict)
+      ansible.builtin.set_fact:
+        _llm_result: "{{ _tc_args_raw | from_json if _tc_args_raw is string else _tc_args_raw }}"
+
+# Some models ignore the forced tool_choice and answer in plain content
+- name: Fallback — extract the result from message content
+  when: not (_has_tool_call | bool)
+  block:
+    - name: Get the raw message content
+      ansible.builtin.set_fact:
+        _raw_content: "{{ llm_response.json.choices[0].message.content | default('') | trim }}"
+
+    - name: Fail if the response has neither tool calls nor content
+      ansible.builtin.fail:
+        msg: "LLM response contained neither tool_calls nor content."
+      when: _raw_content | length == 0
+
+    - name: Strip code fences from content if present
+      ansible.builtin.set_fact:
+        _content_stripped: >-
+          {{ _raw_content
+             | regex_replace('(?m)^```[a-zA-Z]*\n', '')
+             | regex_replace('(?m)\n```\s*$', '')
+             | trim }}
+
+    - name: Parse JSON from content
+      ansible.builtin.set_fact:
+        _llm_result: "{{ _content_stripped | from_json }}"
+
+- name: Validate the LLM result structure
+  ansible.builtin.assert:
+    that:
+      - _llm_result is mapping
+      - _llm_result.rules is defined
+      - _llm_result.rules is sequence
+      - _llm_result.path_trace is defined
+      - _llm_result.path_trace is string
+    fail_msg: "LLM result must contain 'rules' (list) and 'path_trace' (string)."
+
+- name: Validate each rule has required fields
+  ansible.builtin.assert:
+    that:
+      - item.rule_name is defined
+      - item.source_zone is defined
+      - item.source_ip is defined
+      - item.destination_zone is defined
+      - item.destination_ip is defined
+      - item.application is defined
+      - item.service is defined
+      - item.action is defined
+      - item.target_firewall is defined
+    fail_msg: "Rule '{{ item.rule_name | default('unknown') }}' is missing required fields."
+  loop: "{{ _llm_result.rules }}"
+  loop_control:
+    label: "{{ item.rule_name | default('unknown') }}"
+
+- name: Start with an empty rule list (stays empty when existing rules cover the flow)
+  ansible.builtin.set_fact:
+    resolved_rules: []
+
+- name: Normalize the LLM-authored rules into the panos_security_rule shape
+  ansible.builtin.set_fact:
+    resolved_rules: >-
+      {{ resolved_rules | default([]) + [item | combine({
+           'source_zone': item.source_zone if item.source_zone is sequence and item.source_zone is not string else [item.source_zone],
+           'source_ip': item.source_ip if item.source_ip is sequence and item.source_ip is not string else [item.source_ip],
+           'destination_zone': item.destination_zone if item.destination_zone is sequence and item.destination_zone is not string else [item.destination_zone],
+           'destination_ip': item.destination_ip if item.destination_ip is sequence and item.destination_ip is not string else [item.destination_ip],
+           'application': item.application if item.application is sequence and item.application is not string else [item.application],
+           'service': item.service if item.service is sequence and item.service is not string else [item.service],
+           'source_user': item.source_user | default(['any']),
+           'category': item.category | default(['any']),
+           'log_start': item.log_start | default(false),
+           'log_end': item.log_end | default(true),
+           'rule_type': item.rule_type | default('universal'),
+           'negate_source': item.negate_source | default(false),
+           'negate_destination': item.negate_destination | default(false),
+           'disabled': item.disabled | default(false),
+           'location': item.location | default('before'),
+           'existing_rule': item.existing_rule | default('DENY-ANY-ANY'),
+           'state': item.state | default('present'),
+         })] }}
+  loop: "{{ _llm_result.rules }}"
+  loop_control:
+    label: "{{ item.rule_name }}"
+
+- name: Show the AI-authored rules
+  ansible.builtin.debug:
+    msg:
+      - "Path trace: {{ _llm_result.path_trace }}"
+      - "Rules: {{ resolved_rules | map(attribute='rule_name') | list }}"
+      - "Targets: {{ resolved_rules | map(attribute='target_firewall') | list }}"
+      - "Rationale: {{ _llm_result.change_rationale | default('') }}"
+
+- name: Keep results for later roles in this playbook
+  ansible.builtin.set_fact:
+    path_trace: "{{ _llm_result.path_trace }}"
+    change_rationale: "{{ _llm_result.change_rationale | default('') }}"
+
+- name: Publish results as workflow artifacts (cross Job Templates)
+  ansible.builtin.set_stats:
+    data:
+      resolved_rules: "{{ resolved_rules }}"
+      path_trace: "{{ path_trace }}"
+      change_rationale: "{{ change_rationale }}"
+    aggregate: false

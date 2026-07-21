@@ -1,0 +1,43 @@
+---
+- name: Resolve the approved rules and rationale to summarize
+  ansible.builtin.set_fact:
+    approved_rules: "{{ resolved_rules | default([]) }}"
+    change_rationale: "{{ change_rationale | default('') }}"
+
+- name: Render the summary prompt
+  ansible.builtin.set_fact:
+    ai_user_prompt: "{{ lookup('template', ai_reason_prompt_dir ~ '/llm_summary_prompt.j2') }}"
+
+- name: Call the LLM API (plain completion for change summary)
+  ansible.builtin.uri:
+    url: "{{ llm_base_url | regex_replace('/$', '') }}/chat/completions"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ llm_api_key }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: >-
+      {{ {'model': llm_model,
+          'temperature': llm_temperature | default(0.0) | float,
+          'provider': {'order': ['deepinfra'], 'allow_fallbacks': false},
+          'messages': [{'role': 'system', 'content': ai_summary_system_prompt},
+                       {'role': 'user', 'content': ai_user_prompt}]} | to_json }}
+    timeout: "{{ llm_timeout | default(90) }}"
+    status_code: [200]
+  register: llm_response
+  no_log: true
+
+- name: Extract the change summary from the response
+  ansible.builtin.set_fact:
+    change_summary: "{{ llm_response.json.choices[0].message.content | trim }}"
+
+- name: Fail if the LLM returned an empty summary
+  ansible.builtin.fail:
+    msg: "LLM returned an empty summary."
+  when: (change_summary | length) == 0
+
+- name: Publish the change summary as a workflow artifact (cross Job Templates)
+  ansible.builtin.set_stats:
+    data:
+      change_summary: "{{ change_summary }}"
+    aggregate: false

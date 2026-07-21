@@ -1,0 +1,17 @@
+---
+- name: Fail early if the LLM environment is not configured
+  ansible.builtin.assert:
+    that:
+      - llm_api_key | default('') | length > 0
+      - llm_base_url | default('') | length > 0
+      - llm_model | default('') | length > 0
+    fail_msg: >-
+      LLM environment incomplete: set LLM_API_KEY, LLM_BASE_URL and LLM_MODEL
+
+- name: Trace the path and author the rules
+  ansible.builtin.include_tasks: reason.yml
+  when: ai_mode == 'reason'
+
+- name: Create the change summary
+  ansible.builtin.include_tasks: summary.yml
+  when: ai_mode == 'summary'

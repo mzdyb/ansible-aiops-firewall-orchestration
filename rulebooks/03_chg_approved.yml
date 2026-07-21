@@ -1,0 +1,22 @@
+---
+- name: ServiceNow change approved
+  hosts: all
+  sources:
+    - ansible.eda.webhook:
+        host: 0.0.0.0
+        port: 5003
+
+  rules:
+    - name: Change request approved by CAB
+      condition: >-
+        event.payload.record.type == "change_request" and
+        event.payload.record.state == "approved"
+      action:
+        run_job_template:
+          name: "AI FW - Deploy firewall rules"
+          organization: "Default"
+          job_args:
+            extra_vars:
+              change_branch: "{{ event.payload.record.u_change_branch }}"
+              pr_number: "{{ event.payload.record.u_pr_number }}"
+              chg_sys_id: "{{ event.payload.record.sys_id }}"

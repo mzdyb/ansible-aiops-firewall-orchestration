@@ -1,0 +1,76 @@
+---
+- name: Create a ServiceNow change request for the approved PR
+  hosts: localhost
+
+  tasks:
+    - name: Ensure repo is cloned locally
+      ansible.builtin.include_role:
+        name: propose_change
+        tasks_from: ensure_repo
+
+    - name: Switch to the approved PR branch
+      ansible.builtin.command:
+        cmd: "git checkout {{ change_branch }}"
+        chdir: "{{ repo_root }}"
+      changed_when: true
+
+    - name: Get the current FW rules from the SoT
+      ansible.builtin.command:
+        cmd: "git show origin/main:host_vars/{{ item }}/security_rules.yml"
+        chdir: "{{ repo_root }}"
+      loop: "{{ groups['pa_fw'] }}"
+      register: _baseline_rules
+      changed_when: false
+
+    - name: Get the proposed FW rules from the PR branch
+      ansible.builtin.set_fact:
+        resolved_rules: >-
+          {{ resolved_rules | default([])
+             + ((lookup('file', repo_root ~ '/host_vars/' ~ item.item ~ '/security_rules.yml')
+                 | from_yaml).fw_security_rules
+                | rejectattr('rule_name', 'in',
+                             (item.stdout | from_yaml).fw_security_rules
+                             | map(attribute='rule_name') | list)
+                | map('combine', {'target_firewall': item.item})
+                | list) }}
+      loop: "{{ _baseline_rules.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Verify the PR branch contains FW rule changes
+      ansible.builtin.assert:
+        that:
+          - (resolved_rules | default([])) | length > 0
+        fail_msg: "No proposed rules found on branch {{ change_branch }}."
+
+    - name: Draft the change summary with the LLM
+      ansible.builtin.include_role:
+        name: ai_reason
+      vars:
+        ai_mode: summary
+
+    # The GitHub review event doesn't carry any SN ids - the branch name includes the RITM
+    - name: Identify the originating request (RITM) from the change branch
+      ansible.builtin.set_fact:
+        request:
+          number: "{{ change_branch | basename }}"
+          table: "{{ snow_request_table }}"
+
+    - name: Look up the RITM in ServiceNow
+      servicenow.itsm.api_info:
+        instance: "{{ servicenow_instance }}"
+        resource: "{{ snow_request_table }}"
+        sysparm_query: "number={{ request.number }}"
+      register: _ritm_lookup
+      when: servicenow_instance.host | default('') | length > 0
+
+    - name: Add the RITM sys_id to the request
+      ansible.builtin.set_fact:
+        request: "{{ request | combine({'sys_id': (_ritm_lookup.record | default([]) | first | default({})).sys_id | default('')}) }}"
+      when: servicenow_instance.host | default('') | length > 0
+
+    - name: Create the ServiceNow change request and set Pending Deployment
+      ansible.builtin.include_role:
+        name: snow_ticket
+      vars:
+        snow_action: create_change

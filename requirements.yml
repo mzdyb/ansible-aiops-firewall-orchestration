@@ -1,0 +1,8 @@
+---
+# Collections used by both the baseline lab playbooks and the AI-assisted
+# firewall change pipeline.
+collections:
+  - name: paloaltonetworks.panos
+    version: ">=2.21.0"   # matches execution-environment/execution-environment.yml
+  - name: servicenow.itsm     # ServiceNow records, work notes, change requests
+  - name: ansible.eda         # Event-Driven Ansible rulebook sources (webhook)

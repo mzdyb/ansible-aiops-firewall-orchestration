@@ -1,0 +1,31 @@
+---
+ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+# PAN-OS
+panos_provider:
+  ip_address: "{{ ansible_host }}"
+  username: "{{ lookup('env', 'PANOS_USERNAME') }}"
+  password: "{{ lookup('env', 'PANOS_PASSWORD') }}"
+
+# Git
+repo_root: "{{ playbook_dir }}/.."
+git_repo_slug: "mzdyb/ansible-aiops-firewall-orchestration"
+git_main_branch: "main"
+git_branch_prefix: "fw-change"   # branches: fw-change/RITMxxxxxxx
+github_api_url: "https://api.github.com"
+github_token: "{{ lookup('env', 'GITHUB_TOKEN') }}"
+
+# LLM
+llm_base_url: "{{ lookup('env', 'LLM_BASE_URL') }}"
+llm_model: "{{ lookup('env', 'LLM_MODEL') }}"
+llm_api_key: "{{ lookup('env', 'LLM_API_KEY') }}"
+llm_temperature: 0.0
+llm_timeout: 90
+llm_max_tokens: 4096
+
+# ServiceNow
+snow_request_table: "sc_req_item"    # Requested Item - the record the SN Business Rule posts from
+servicenow_instance:
+  host: "{{ lookup('env', 'SN_HOST') }}"
+  username: "{{ lookup('env', 'SN_USERNAME') }}"
+  password: "{{ lookup('env', 'SN_PASSWORD') }}"

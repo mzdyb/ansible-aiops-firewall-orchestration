@@ -1,0 +1,32 @@
+---
+fw_virtual_router:
+  name: "default"
+  interfaces: ["ethernet1/1", "ethernet1/2"]
+  state: present
+
+fw_interfaces:
+  - if_name: "ethernet1/1"
+    mode: "layer3"
+    ip: ["192.168.0.6/30"]
+    enable_dhcp: false
+    create_default_route: false
+    vr_name: default
+    zone_name: CORE
+    state: present
+
+  - if_name: "ethernet1/2"
+    mode: "layer3"
+    ip: ["10.20.20.1/24"]
+    enable_dhcp: false
+    create_default_route: false
+    vr_name: default
+    zone_name: DB
+    state: present
+
+fw_static_routes:
+  - name: "to-app-subnet"
+    destination: "10.10.10.0/24"
+    nexthop: "192.168.0.5"
+    virtual_router: "default"
+    metric: 10
+    state: present

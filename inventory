@@ -1,0 +1,9 @@
+[local]
+localhost ansible_connection=local
+
+[pa_fw]
+edge-fw-01 ansible_host=10.77.77.10
+dc-fw-01 ansible_host=10.77.77.11
+
+[router]
+rtr-01 ansible_host=10.77.77.12

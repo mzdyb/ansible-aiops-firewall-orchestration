@@ -1,0 +1,4 @@
+---
+change_branch: "{{ git_branch_prefix | default('fw-change') }}/{{ request.number | default('CHGXXXX') }}"
+propose_git_user_name: "aap-firewall-bot"
+propose_git_user_email: "aap-firewall-bot@example.com"

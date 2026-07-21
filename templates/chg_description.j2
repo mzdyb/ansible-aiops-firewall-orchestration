@@ -1,0 +1,23 @@
+{# AI-drafted summary in ServiceNow change_request description #}
+{{ change_summary }}
+
+--- Change details (automated) ---
+Originating request: {{ request.number | default('n/a') }}
+Pull request: {{ pr_url | default('n/a') }}
+Target firewall(s): {% for r in approved_rules %}{{ r.target_firewall }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+Rule(s):
+{% for r in approved_rules %}
+  - {{ r.rule_name }}: permit {{ r.application | join(',') }} from {{ r.source_ip | join(',') }} to {{ r.destination_ip | join(',') }} (inserted {{ r.location | default('before') }} {{ r.existing_rule | default('DENY-ANY-ANY') }})
+{% endfor %}
+
+Implementation plan: 
+1. AAP checks out the approved branch
+2. Snapshots the FW running config
+3. Applies the rule
+4. Runs 'validate full' commmand
+5. Commits configuration on FW
+6. Merges the PR to the source-of-truth branch and closes this change
+
+Rollback plan: 
+Restore the pre-change config snapshot and close the PR unmerged.

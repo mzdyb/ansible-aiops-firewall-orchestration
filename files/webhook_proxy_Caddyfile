@@ -1,0 +1,16 @@
+# Reverse proxy for EDA webhooks
+
+:8090 {
+	handle /snow* {
+		reverse_proxy 192.168.130.5:5001
+	}
+	handle /pr* {
+		reverse_proxy 192.168.130.5:5002
+	}
+	handle /chg* {
+		reverse_proxy 192.168.130.5:5003
+	}
+	handle {
+		respond "unknown webhook path" 404
+	}
+}
