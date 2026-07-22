@@ -1,6 +1,6 @@
 # AIOps-Driven Firewall Change Orchestration with Ansible Automation Platform
 
-This project demonstrates how Ansible Automation Platform orchestrates ITSM, AI, and firewalls infrastructure in a single event-driven workflow based on GitOps principles.
+This project demonstrates how Ansible Automation Platform orchestrates ITSM, AI, and firewall infrastructure in a single event-driven workflow based on GitOps principles.
 
 Palo Alto firewall automation serves as the example here, but the same architectural pattern can also be applied to other use cases, including compliance remediation, access management and broader network automation scenarios beyond firewall changes.
 
