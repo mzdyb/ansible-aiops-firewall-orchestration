@@ -74,7 +74,7 @@ The demo lab is built using [Containerlab](https://containerlab.dev) and include
 * One Arista cEOS router
 * Two Linux containers representing an application and a database server
 
-The Containerlab topology definition and related files are available in the `topology` directory.
+The Containerlab topology definition with the infrastructure details and related files are available in the `topology` directory.
 
 
 ### Baseline Firewall Configuration
@@ -92,7 +92,7 @@ The initial security policies:
 
 The existing rules are intentional. The AI must analyze the current configuration and determine where a new rule is actually required.
 
-## Demo Use Cases
+## Example Use Cases
 
 ### Use Case 1
 
