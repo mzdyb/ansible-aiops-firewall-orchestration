@@ -107,7 +107,8 @@ they only demonstrate the tracing method. Example topology:
 Check existing rules:
 - fw-branch: ALLOW-USERS-TO-TRANSIT-SSH-CHG0407 covers USERS→TRANSIT for ssh
   with src 172.16.10.0/24 (includes .20) and dst 172.16.40.0/24 (includes .8).
-  Already covered — no rule needed on fw-branch.
+  Already covered — no rule needed on fw-branch. No /32 duplicate is authored
+  for documentation — the broader rule IS the coverage.
 - fw-dc: no rule covers ssh TRANSIT→SRV. Need a rule.
 
 Rules: one rule on fw-dc only (TRANSIT→SRV, ssh, source 172.16.10.20/32,
@@ -171,14 +172,22 @@ IMPORTANT: Use the exact IP addresses from the request. source_ip must be
 ["{{ network_state.request.source_ip }}"] and destination_ip must be
 ["{{ network_state.request.destination_ip }}"]. Do NOT use placeholders.
 
-If an existing rule already covers the flow on a firewall, skip that firewall
-and note it in the path trace and rationale.
+Coverage is decided by containment, not literal equality. An existing allow
+rule covers the flow when its zone pair matches the trace, its application
+matches the request, and its source and destination networks contain the
+requested IPs — a /24 containing the requested /32 is full coverage. A covered
+firewall gets NO rule. Do NOT author a narrower duplicate of a covering rule —
+not "for documentation", not "for explicitness", not to tie the ticket to the
+rulebase. A rule shadowed by a broader one is a policy defect, not
+documentation. Note the covering rule in the path trace and rationale instead.
 
 Treat the well-known application list above as authoritative and exhaustive.
-If the requested protocol/port does not match an entry in that list, do NOT
-author rules — even if you know a PAN-OS App-ID for that port. Return an empty
-rules list and state in change_rationale that the request needs manual review
-(an engineer must confirm or create the App-ID before a rule can be authored).
+If the requested protocol/port does not match an entry in that list, the ONLY
+valid tool call has rules: [] — do NOT author rules, even if you know a PAN-OS
+App-ID for that port, and NEVER invent an application name from the port
+number (e.g. "tcp-48620"). State in change_rationale that the request needs
+manual review (an engineer must confirm or create the App-ID before a rule
+can be authored).
 
 If an existing deny rule on any firewall explicitly blocks the requested flow
 (matching zones, application, and overlapping source/destination), the whole
@@ -191,3 +200,8 @@ If the source or destination IP is not contained in any interface subnet of
 any firewall, the path cannot be traced — do NOT guess zones. Return an empty
 rules list and state in change_rationale that the request is outside the known
 topology and needs manual review.
+
+The rules array must match your own conclusion. If your trace or rationale
+concludes a device is covered or that no rule may be authored, the tool call
+must contain no rule for it — never state "no rule needed" or "rules list is
+empty" while emitting one anyway.

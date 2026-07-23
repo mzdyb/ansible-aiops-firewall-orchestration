@@ -18,7 +18,8 @@ ai_reason_system_prompt: >-
   zone (the zone of the interface where traffic exits toward the destination).
   (3) AUTHOR THE RULES: emit one security rule per firewall that needs one,
   with the correct zone pair, the request's source/dest IPs, and the
-  appropriate application/service.
+  appropriate application/service. A firewall whose existing rulebase already
+  permits the flow, including via a broader subnet rule, needs none.
   Think step by step through the path trace. The zone pairs on different
   firewalls will typically be ASYMMETRIC (e.g. APP→CORE on one, CORE→DB on
   the other) because traffic enters and exits each device through different
@@ -56,10 +57,15 @@ ai_tool_schema:
             type: array
             description: >-
               One security rule per firewall on the path that needs a new allow
-              rule. Omit a firewall if it already has a rule covering this flow.
+              rule. Omit a firewall if it already has a rule covering this flow
+              — including a broader subnet rule containing the requested IPs.
+              Never add a narrower duplicate of a covering rule, even for
+              documentation or ticket traceability.
               MUST be an empty array when the requested port matches no entry in
               the authoritative application list — never invent or guess an
               application name, even as a placeholder for a custom App-ID.
+              This array must match the rationale: never emit a rule the
+              rationale says is unnecessary or not authorable.
             items:
               type: object
               properties:
