@@ -24,8 +24,6 @@
         negate_source: "{{ item.negate_source }}"
         negate_destination: "{{ item.negate_destination }}"
         disabled: "{{ item.disabled }}"
-        # No placement params: host_vars lists rules in rulebase order, and a
-        # 'before DENY-ANY-ANY' anchor dangles on a fresh box until that rule exists.
         commit: false
         state: "{{ fw_rules_state | default(item.state | default('present')) }}"
       loop: "{{ fw_security_rules | default([]) }}"
