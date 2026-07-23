@@ -1,6 +1,5 @@
 ---
 # Managed by the AI firewall change pipeline.
-# Last change: RITM0010054.
 fw_security_rules:
   - rule_name: "ALLOW-APP-TO-CORE-DNS-CHG0001"
     description: "Example legacy DNS rule - destination 10.99.99.10 is not routable in this lab."
@@ -31,27 +30,6 @@ fw_security_rules:
     destination_zone: ["CORE"]
     destination_ip: ["10.20.20.0/24"]
     application: ["postgres"]
-    service: ["application-default"]
-    category: ["any"]
-    action: "allow"
-    log_start: false
-    log_end: true
-    rule_type: "universal"
-    negate_source: false
-    negate_destination: false
-    disabled: false
-    location: "before"
-    existing_rule: "DENY-ANY-ANY"
-    state: present
-
-  - rule_name: "ALLOW-APP-TO-CORE-SSH-RITM0010054"
-    description: "Allow SSH (tcp/22) from 10.10.10.5 to 10.20.20.5 through edge-fw-01 APP\u2192CORE zones per RITM0010054."
-    source_zone: ["APP"]
-    source_ip: ["10.10.10.5/32"]
-    source_user: ["any"]
-    destination_zone: ["CORE"]
-    destination_ip: ["10.20.20.5/32"]
-    application: ["ssh"]
     service: ["application-default"]
     category: ["any"]
     action: "allow"
