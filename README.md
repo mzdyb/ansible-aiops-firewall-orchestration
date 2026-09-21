@@ -128,5 +128,9 @@ The workflow should stop without proposing or deploying any firewall rules.
 
 The LLM should generate a ServiceNow work note explaining that no matching application ID was found and that an engineer must define it manually before the request can proceed.
 
+## Additional Resources
+
+For more information about AIOps-Driven Firewall Change Orchestration with Ansible Automation Platform, see my article [Build AI-assisted firewall workflows with Ansible Automation Platform](https://developers.redhat.com/articles/2026/09/04/build-ai-assisted-firewall-workflows-ansible-automation-platform) on Red Hat Developer website.
+
 ## Author
 [Michal Zdyb](https://www.linkedin.com/in/michal-zdyb-9aa4046/)
