@@ -24,6 +24,8 @@
         negate_source: "{{ item.negate_source }}"
         negate_destination: "{{ item.negate_destination }}"
         disabled: "{{ item.disabled }}"
+        location: "{{ item.location | default(omit) }}"
+        existing_rule: "{{ item.existing_rule | default(omit) }}"
         commit: false
         state: "{{ fw_rules_state | default(item.state | default('present')) }}"
       loop: "{{ fw_security_rules | default([]) }}"

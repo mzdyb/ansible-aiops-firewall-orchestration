@@ -1,0 +1,22 @@
+---
+- name: Delete firewall rules not present in the source of truth
+  hosts: pa_fw
+  connection: local
+
+  tasks:
+    - name: Gather live security rules
+      paloaltonetworks.panos.panos_security_rule:
+        provider: "{{ panos_provider }}"
+        gathered_filter: '*'
+        state: gathered
+      register: live_rules
+
+    - name: Delete rules not present in sot
+      paloaltonetworks.panos.panos_security_rule:
+        provider: "{{ panos_provider }}"
+        rule_name: "{{ item }}"
+        commit: false
+        state: absent
+      loop: >-
+        {{ live_rules.gathered | map(attribute='rule_name')
+           | difference(fw_security_rules | map(attribute='rule_name')) }}

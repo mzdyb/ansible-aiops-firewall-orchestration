@@ -1,0 +1,68 @@
+---
+- name: Restore baseline security rules on main
+  hosts: localhost
+  vars:
+    baseline_tag: demo-baseline
+    git_user_name: "aap-bot1"
+    git_user_email: "300886673+aap-bot1@users.noreply.github.com"
+    rule_files: "{{ groups['pa_fw'] | map('regex_replace', '^(.+)$', 'host_vars/\\1/security_rules.yml') | list }}"
+
+  tasks:
+    - name: Require a GitHub token
+      ansible.builtin.assert:
+        that: github_token | default('') | length > 0
+        fail_msg: "No GITHUB_TOKEN; attach the GitHub PAT credential."
+
+    - name: Create a workspace
+      ansible.builtin.tempfile:
+        state: directory
+      register: workspace
+
+    - name: Clone main
+      ansible.builtin.command:
+        cmd: >-
+          git clone --branch {{ git_main_branch }}
+          https://x-access-token:{{ github_token }}@github.com/{{ git_repo_slug }}.git {{ workspace.path }}
+      changed_when: false
+      no_log: true
+
+    - name: Check the baseline tag exists
+      ansible.builtin.command:
+        cmd: "git rev-parse --verify --quiet refs/tags/{{ baseline_tag }}"
+        chdir: "{{ workspace.path }}"
+      changed_when: false
+
+    - name: Restore the rule files from the baseline tag
+      ansible.builtin.command:
+        cmd: "git checkout {{ baseline_tag }} -- {{ rule_files | join(' ') }}"
+        chdir: "{{ workspace.path }}"
+      changed_when: false
+
+    - name: Compare with main
+      ansible.builtin.command:
+        cmd: git diff --cached --stat
+        chdir: "{{ workspace.path }}"
+      register: rules_diff
+      changed_when: rules_diff.stdout | length > 0
+
+    - name: Commit and push the baseline rules
+      when: rules_diff is changed
+      block:
+        - name: Commit the baseline rules
+          ansible.builtin.command:
+            cmd: >-
+              git -c user.name="{{ git_user_name }}" -c user.email="{{ git_user_email }}"
+              commit -m "pre-demo rules cleanup"
+            chdir: "{{ workspace.path }}"
+          changed_when: true
+
+        - name: Push to main
+          ansible.builtin.command:
+            cmd: "git push https://x-access-token:{{ github_token }}@github.com/{{ git_repo_slug }}.git {{ git_main_branch }}"
+            chdir: "{{ workspace.path }}"
+          changed_when: true
+          no_log: true
+
+    - name: Show what was restored
+      ansible.builtin.debug:
+        msg: "{{ rules_diff.stdout_lines if rules_diff is changed else 'main already matches ' ~ baseline_tag }}"
