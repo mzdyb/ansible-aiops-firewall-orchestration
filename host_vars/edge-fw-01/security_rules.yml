@@ -23,7 +23,7 @@ fw_security_rules:
     state: present
 
   - rule_name: "ALLOW-APP-TO-CORE-POSTGRES-CHG0002"
-    description: "App tier to database tier PostgreSQL - provisioned with the edge segment."
+    description: "App tier to database tier PostgreSQL"
     source_zone: ["APP"]
     source_ip: ["10.10.10.0/24"]
     source_user: ["any"]
